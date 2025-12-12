@@ -185,59 +185,59 @@ def process_sample(
     Returns:
         Dictionary with sample ID and tree data, or None if processing failed
     """
-    try:
-        # Extract relevant fields from sample
-        # These field names depend on the specific dataset structure
-        # For AR-LSAT, common fields might be 'question', 'answer', etc.
-        sample_id = sample.get('id', sample.get('sample_id', str(hash(str(sample)))))
-        question = sample.get('question', sample.get('text', ''))
-        ground_truth = sample.get('answer', sample.get('label', ''))
-        
-        if not question or not ground_truth:
-            logger.warning(f"Sample {sample_id} missing required fields")
-            return None
-        
-        # Create prompt - adapt based on your requirements
-        prompt = (
-            f"Question: {question}\n\n"
-            f"Please reason step by step with steps separated by \"\\n\\n\", "
-            f"and put the index of the correct answer within \\boxed{{}}."
-        )
-        
-        # Build MCTS tree
-        tree = sampler.build_mcts_tree(
-            sample_id=sample_id,
-            question=question,
-            original_prompt=prompt,
-            ground_truth=ground_truth,
-        )
-        
-        # Extract answers from leaf nodes and compute rewards
-        correct_leaf_ids = []
-        for leaf_id in tree.leaf_ids:
-            leaf_node = tree.nodes[leaf_id]
-            extracted_answer = sampler.extract_boxed_answer(leaf_node.content)
-            
-            # Compare with ground truth
-            if extracted_answer and extracted_answer.strip() == str(ground_truth).strip():
-                correct_leaf_ids.append(leaf_id)
-        
-        # Compute rewards
-        tree.backpropagate_reward(correct_leaf_ids)
-        
-        return {
-            'sample_id': sample_id,
-            'question': question,
-            'ground_truth': ground_truth,
-            'tree': tree.to_dict(),
-            'num_leaves': len(tree.leaf_ids),
-            'num_correct_leaves': len(correct_leaf_ids),
-        }
-        
-    except Exception as e:
-        logger.error(f"Error processing sample: {e}")
-        return None
 
+    # Extract relevant fields from sample
+    # These field names depend on the specific dataset structure
+    # For AR-LSAT, common fields might be 'question', 'answer', etc.
+    sample_id = sample.get('id', sample.get('sample_id', str(hash(str(sample)))))
+    context = sample.get('context', '')
+    option_list = sample.get('answers', [])
+    options = ""
+    for i in range(len(option_list)):
+        options += f"\n\n({chr(65 + i)}) {option_list[i]}"
+    question = sample.get('question', sample.get('text', ''))
+    ground_truth = sample.get('answer', sample.get('label', ''))
+    
+    if not question or not ground_truth:
+        logger.warning(f"Sample {sample_id} missing required fields")
+        return None
+    
+    # Create prompt - adapt based on your requirements
+    prompt = (
+        f"Question: {context}\n\n{question}\n\n"
+        f"Options: {options}\n\n"
+        f"Please reason step by step with steps separated by \"\\n\\n\" and put the index of the correct answer within \\boxed{{}}."
+    )
+    
+    # Build MCTS tree
+    tree = sampler.build_mcts_tree(
+        sample_id=sample_id,
+        question=question,
+        original_prompt=prompt,
+        ground_truth=ground_truth,
+    )
+    
+    # Extract answers from leaf nodes and compute rewards
+    correct_leaf_ids = []
+    for leaf_id in tree.leaf_ids:
+        leaf_node = tree.nodes[leaf_id]
+        extracted_answer = sampler.extract_boxed_answer(leaf_node.content)
+        
+        # Compare with ground truth
+        if extracted_answer and extracted_answer.strip() == str(ground_truth).strip():
+            correct_leaf_ids.append(leaf_id)
+    
+    # Compute rewards for all nodes based on correct leaf descendants
+    tree.compute_step_rewards(correct_leaf_ids)
+    
+    return {
+        'sample_id': sample_id,
+        'question': question,
+        'ground_truth': ground_truth,
+        'tree': tree.to_dict(),
+        'num_leaves': len(tree.leaf_ids),
+        'num_correct_leaves': len(correct_leaf_ids),
+    }
 
 def save_results(
     results: list,

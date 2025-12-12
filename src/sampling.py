@@ -50,6 +50,13 @@ class MCTSSampler:
         self.num_branches = num_branches
         self.separator = separator
         self.device = device
+        
+        # Ensure tokenizer has a pad token for batch processing
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        # For decoder-only models, use left-padding to avoid affecting generation
+        self.tokenizer.padding_side = "left"
     
     def generate_responses(
         self,
@@ -76,7 +83,14 @@ class MCTSSampler:
         
         # Use HuggingFace model with output_scores to get logits
         try:
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            # Tokenize with proper padding and truncation
+            inputs = self.tokenizer(
+                prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length - 50,  # Leave room for generation
+            ).to(self.device)
             input_length = inputs["input_ids"].shape[1]
             
             with torch.no_grad():
@@ -119,10 +133,17 @@ class MCTSSampler:
         except Exception as e:
             # Fallback: generate without logits tracking
             print(f"Warning: Could not extract logits: {e}")
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            inputs = self.tokenizer(
+                prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length - 50,
+            ).to(self.device)
             with torch.no_grad():
                 outputs_ids = self.model.generate(
                     inputs["input_ids"],
+                    attention_mask=inputs.get("attention_mask"),
                     max_length=max_length,
                     num_return_sequences=num_responses,
                     temperature=0.7,
@@ -334,18 +355,21 @@ class MCTSSampler:
         Returns:
             MCTSTree object with complete structure
         """
+
         tree = MCTSTree(
             sample_id=sample_id,
             question=question,
             prompt=original_prompt,
         )
+
         
         # Generate initial responses
         initial_responses = self.generate_responses(
             original_prompt,
             num_responses=self.num_samples,
         )
-        
+
+
         # Create root node
         root_node = TreeNode(
             node_id=f"root_{uuid.uuid4().hex[:8]}",
@@ -355,6 +379,7 @@ class MCTSSampler:
             is_leaf=len(initial_responses) == 0,
         )
         tree.add_node(root_node)
+
         
         # Process each initial response
         all_leaf_nodes = []
